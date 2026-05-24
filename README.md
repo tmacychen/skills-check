@@ -1,0 +1,126 @@
+# Skill Validator
+
+> 对 Agent Skill 目录结构进行自动合规检查。支持中英文技能检测。
+
+## 功能
+
+对任意 Skill 目录执行 **10 项** 合规检查，涵盖：
+
+| 检查 | 说明 | 场景 |
+|---|---|---|
+| **目录命名规范** | 全小写、连字符命名 | 所有 Skill |
+| **目录结构完整性** | Hub-and-Spoke 结构（scripts/ references/ assets/ evals/） | 所有 Skill |
+| **Frontmatter 质量** | description 是否存在、是否为触发句式 | 所有 Skill |
+| **正文质量** | Token 估算、教程式写作检测、Markdown 表格剥离提示 | 中英文 Skill |
+| **轨道化常识检测** | 是否包含模型已掌握的常识（pip 命令、Git 教程、基础语法等） | 中英文 Skill |
+| **硬编码资产检测** | API Key、URL、Token、MCP 服务地址等是否硬编码在 SKILL.md | 中英文 Skill |
+| **评估集检查** | 是否有 `evals/` 目录或 `SPECIAL_CASES.md` | 所有 Skill |
+| **单文件依赖检查** | 是否整个 Skill 只有一个 `SKILL.md` 文件（应拆分） | 所有 Skill |
+| **文件尺寸红线** | 单文件 > 200KB 报警 | 所有 Skill |
+| **中文常识灌输检测** | 长篇中文解释性文字（模型已掌握的基础知识） | 中文 Skill |
+
+## 安装
+
+```bash
+# 无需安装，直接运行
+python3 skill_validator.py --help
+```
+
+## 用法
+
+```bash
+# 检查单个 Skill
+python3 skill_validator.py ./my-skill
+
+# 批量检查父目录下所有 Skill
+python3 skill_validator.py ./skills/
+
+# 指定检查语言
+python3 skill_validator.py ./my-skill --lang zh    # 仅中文规则
+python3 skill_validator.py ./my-skill --lang en    # 仅英文规则
+python3 skill_validator.py ./my-skill --lang mixed # 中英文规则全跑
+
+# 默认 auto: 自动检测语言
+python3 skill_validator.py ./my-skill --lang auto
+
+# JSON 输出 (CI 使用)
+python3 skill_validator.py ./my-skill --json
+```
+
+### 语言模式
+
+| 模式 | 行为 |
+|---|---|
+| `auto`（默认） | 根据 SKILL.md 中文字占比自动判定语言 |
+| `en` | 仅运行英文规则 |
+| `zh` | 仅运行中文规则 |
+| `mixed` | 运行所有中英文规则 |
+
+自动检测阈值：
+- 中文字符 > 15% → 中文
+- 中文字符 < 5% → 英文
+- 之间 → 混用
+
+## 输出
+
+```
+============================================================
+检查: my-skill
+============================================================
+  ✓ 目录命名规范
+  ✓ Hub-and-Spoke 目录结构完整性
+  ⚠ SKILL.md Frontmatter & Description
+      → description 以'本技能旨在...'开头（中文废话模式）
+  ✗ 反模式检测: 轨道化常识
+      → 检测到 '教导基础 Git 命令' — 模型预训练已掌握，建议删除
+```
+
+### 状态
+
+| 图标 | 含义 |
+|---|---|
+| ✅ ✓ | 通过 |
+| ⚠ | 警告（建议性） |
+| ✗ | 失败（需修复） |
+
+## 退出码
+
+- **0** — 所有检查通过（无失败项）
+- **1** — 存在失败项
+
+## 反模式说明
+
+### 轨道化常识（Railroading）
+
+指在 SKILL.md 中教导 AI 模型已经通过预训练掌握的基础知识。典型表现：
+
+```
+# 英文
+"To create a function, use the def keyword..."
+"Install packages with pip install..."
+
+# 中文
+"要定义一个函数，可以使用 def 关键字..."
+"使用 pip 安装依赖..."
+```
+
+### 常识灌输（Chinese Common Knowledge Common）
+
+中文独有反模式：长篇解释性文字，如"Git 是一个版本控制系统"、"Python 是一种编程语言"等模型预训练已掌握的内容。
+
+### 硬编码资产
+
+API 端点、密钥、Token、配置地址等高变动信息直接写在 SKILL.md 中。应外部化到 `config.json`。
+
+## 项目
+
+```text
+how-to-make-skills/
+├── skill_validator.py     # 主程序
+├── how-to-write-skills-guide.md  # Agent Skill 编写指南
+└── README.md              # 本文件
+```
+
+## License
+
+MIT
