@@ -1,10 +1,14 @@
 # Skill Validator
 
 > 对 Agent Skill 目录结构进行自动合规检查。支持中英文技能检测。
+>
+> *"I have only made this letter longer because I have not had the time to make it shorter."* — Blaise Pascal
+>
+> **写一个简短的 Skill 很难。正是这种难度造就了它的价值。**
 
 ## 功能
 
-对任意 Skill 目录执行 **10 项** 合规检查，涵盖：
+对任意 Skill 目录执行 **12 项** 合规检查，涵盖：
 
 | 检查 | 说明 | 场景 |
 |---|---|---|
@@ -14,10 +18,12 @@
 | **正文质量** | Token 估算、教程式写作检测、Markdown 表格剥离提示 | 中英文 Skill |
 | **轨道化常识检测** | 是否包含模型已掌握的常识（pip 命令、Git 教程、基础语法等） | 中英文 Skill |
 | **硬编码资产检测** | API Key、URL、Token、MCP 服务地址等是否硬编码在 SKILL.md | 中英文 Skill |
-| **评估集检查** | 是否有 `evals/` 目录或 `SPECIAL_CASES.md` | 所有 Skill |
+| **评估集检查** | 是否有 `evals/` 目录，以及 `positive.json` / `negative.json` | 所有 Skill |
+| **Gotchas 飞轮检查** | 是否有 `gotchas/` 目录或 `## Gotchas` 章节 | 所有 Skill |
 | **单文件依赖检查** | 是否整个 Skill 只有一个 `SKILL.md` 文件（应拆分） | 所有 Skill |
 | **文件尺寸红线** | 单文件 > 200KB 报警 | 所有 Skill |
 | **中文常识灌输检测** | 长篇中文解释性文字（模型已掌握的基础知识） | 中文 Skill |
+| **跨模型兼容性标注** | 通过 `--models` 参数标注目标编排模型族 | 可选 |
 
 ## 安装
 
@@ -60,6 +66,17 @@ python3 skill_validator.py ./my-skill --json
 - 中文字符 > 15% → 中文
 - 中文字符 < 5% → 英文
 - 之间 → 混用
+
+### 跨模型兼容性标注
+
+```bash
+# 标注此 Skill 兼容的编排模型族
+python3 skill_validator.py ./my-skill --models gpt claude
+python3 skill_validator.py ./my-skill --models all
+```
+
+可选值：`gpt`, `claude`, `sonnet`, `opus`, `all`。
+该参数仅在输出头部显示标注信息，不影响检查逻辑。
 
 ## 输出
 
@@ -116,9 +133,18 @@ API 端点、密钥、Token、配置地址等高变动信息直接写在 SKILL.m
 
 ```text
 how-to-make-skills/
-├── skill_validator.py     # 主程序
-├── how-to-write-skills-guide.md  # Agent Skill 编写指南
-└── README.md              # 本文件
+├── skill_validator.py              # 主程序
+├── how-to-write-skills-guide.md    # Agent Skill 编写指南
+├── template/your-skill/            # Skill 目录模板
+│   ├── SKILL.md                    #   核心入口 (含 Gotchas 章节)
+│   ├── evals/                      #   评估集 (positive.json + negative.json)
+│   ├── scripts/                    #   确定性脚本
+│   ├── references/                 #   按需加载的深度资料
+│   ├── assets/                     #   模板/Schema
+│   └── config.json                 #   初始化配置
+├── docs/
+│   └── perplexity-agent-skills-guide-summary.md  # Perplexity 原文摘要
+└── README.md                       # 本文件
 ```
 
 ## License

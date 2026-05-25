@@ -1,0 +1,14 @@
+[
+  {
+    "query": "语义邻近但不应触发的查询",
+    "should_load": false,
+    "expected_skill": "other-skill",
+    "note": "邻域混淆: 这句话应该路由到 other-skill，而不是 your-skill"
+  },
+  {
+    "query": "另一个邻域混淆查询",
+    "should_load": false,
+    "expected_skill": null,
+    "note": "负样本: 确保此 Skill 不会被错误路由到这"
+  }
+]

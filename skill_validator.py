@@ -376,6 +376,17 @@ def check_eval_set(skill_dir: Path) -> CheckResult:
     eval_dir = skill_dir / "evals"
     if eval_dir.exists():
         r.ok("存在 evals/ 目录 (好)")
+        # 检查是否同时有正反例
+        pos = eval_dir / "positive.json"
+        neg = eval_dir / "negative.json"
+        if pos.exists() and neg.exists():
+            r.ok("evals/ 同时包含 positive.json 和 negative.json (好)")
+        elif pos.exists():
+            r.warn("evals/ 只有 positive.json, 缺少 negative.json (反例更重要)")
+        elif neg.exists():
+            r.warn("evals/ 只有 negative.json, 缺少 positive.json")
+    else:
+        r.warn("没有 evals/ 目录 — 建议添加正反例 JSON 文件")
 
     # 检查 SKILL.md 中是否包含正/负样本
     if skill_md.exists():
@@ -385,6 +396,44 @@ def check_eval_set(skill_dir: Path) -> CheckResult:
 
     if r.status == OK:
         r.warn("未找到显式的评估集或负样本 (建议在 SKILL.md 或 evals/ 中添加)")
+
+    return r
+
+
+def check_gotchas_flywheel(skill_dir: Path) -> CheckResult:
+    """检查 Gotchas 维护飞轮机制 (gotchas/ 目录或 gotcha 条目)"""
+    r = CheckResult("Gotchas 飞轮维护检查")
+    skill_md = skill_dir / "SKILL.md"
+
+    # 检查是否有 gotchas/ 目录
+    gotchas_dir = skill_dir / "gotchas"
+    if gotchas_dir.exists():
+        gotcha_files = list(gotchas_dir.glob("*.md"))
+        r.ok(f"存在 gotchas/ 目录 ({len(gotcha_files)} 个文件)")
+
+    # 检查 SKILL.md 中是否包含 gotcha 相关标记
+    if skill_md.exists():
+        content = read_file_safe(skill_md)
+        gotcha_patterns = [
+            (r'(?i)## Gotchas?\s*\n', "存在 '## Gotchas' 章节"),
+            (r'(?i)(陷阱|坑|注意|不要|避免|禁止)', "包含 gotcha 关键词 (陷阱/坑/注意/不要/避免/禁止)"),
+            (r'(?i)#+ 已知失败|#+ 常见错误|#+ 边界情况', "存在已知失败/常见错误/边界情况章节"),
+        ]
+        found_any = False
+        for pat, desc in gotcha_patterns:
+            if re.search(pat, content):
+                r.ok(f"{desc}")
+                found_any = True
+                break
+
+        if not found_any and not gotchas_dir.exists():
+            r.warn("未发现 Gotcha 机制 — Agent 失败时应在尾部追加 gotcha 条目")
+
+    if r.status == OK and not gotchas_dir.exists() and skill_md.exists():
+        pass  # 已在上面 warn 过
+
+    if r.status == OK:
+        r.ok("Gotcha 机制正常")
 
     return r
 
@@ -528,6 +577,7 @@ def validate_skill(skill_dir: Path, lang: str = 'auto') -> list:
         results.append(check_railroading(skill_md, lang))
         results.append(check_hardcoded_assets(skill_dir, lang))
         results.append(check_eval_set(skill_dir))
+        results.append(check_gotchas_flywheel(skill_dir))
         results.append(check_flat_layout(skill_dir))
         results.append(check_file_size_redlines(skill_dir))
         results.append(check_chinese_common_knowledge(skill_md, lang))
@@ -572,6 +622,9 @@ def main():
     parser.add_argument("--lang", default="auto", choices=["auto", "en", "zh", "mixed"],
                         help="语言模式: auto (自动检测), en (仅英文规则), zh (仅中文规则), mixed (双语规则)")
     parser.add_argument("--json", action="store_true", help="输出 JSON 格式 (供 CI 使用)")
+    parser.add_argument("--models", nargs="*", default=None,
+                        choices=["gpt", "claude", "sonnet", "opus", "all"],
+                        help="指定目标编排模型族进行兼容性标注 (用于报告头部)")
     args = parser.parse_args()
 
     target = Path(args.path).resolve()
@@ -595,6 +648,11 @@ def main():
     if not skills_to_check:
         print(f"{FAIL} 未找到包含 SKILL.md 的 Skill 目录")
         sys.exit(1)
+
+    # 输出 --models 信息 (如果有)
+    if args.models:
+        models_str = ", ".join(args.models)
+        print(f"\n{BOLD}目标模型族:{RESET} {models_str}")
 
     all_results = {}
 

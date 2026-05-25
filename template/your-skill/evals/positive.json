@@ -1,0 +1,14 @@
+[
+  {
+    "query": "用户典型触发语句 1",
+    "should_load": true,
+    "expected_skill": "your-skill",
+    "note": "典型场景: 用户在什么情况下会触发此 Skill"
+  },
+  {
+    "query": "用户典型触发语句 2",
+    "should_load": true,
+    "expected_skill": "your-skill",
+    "note": "边缘场景: 稍偏离但应触发的场景"
+  }
+]
