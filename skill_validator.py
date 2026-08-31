@@ -200,7 +200,7 @@ def check_frontmatter(skill_md: Path, lang: str = 'mixed') -> CheckResult:
 
     # 检查长度
     if desc_tokens > 60:
-        r.warn(f"description 约 {desc_tokens} tokens (>50)，建议精简")
+        r.warn(f"description 约 {desc_tokens} tokens (超过 60)，建议精简")
 
     # 工作流泄漏 (2026 社区共识): Agent 会从 description 提取计划并跳过加载正文
     workflow_leak_patterns = [
@@ -309,7 +309,7 @@ def check_railroading(skill_md: Path, lang: str = 'mixed') -> CheckResult:
         (r'(?i)npm (install|run build|run dev)', "教导 npm 命令"),
         (r'(?i)mkdir\s+-p', "教导 mkdir 命令"),
         (r'(?i)rm\s+-rf', "教导 rm 命令"),
-        (r'(?i)(def |function |class |import )', "教导基础编程语法 (def/function/class/import)"),
+        (r'(?m)^\s*(def |function |class |import )\w', "教导基础编程语法 (def/function/class/import)"),
     ]
 
     # ── 中文轨道化模式 ──
@@ -326,7 +326,7 @@ def check_railroading(skill_md: Path, lang: str = 'mixed') -> CheckResult:
         (r'创建一个类|定义类', "教导创建类"),
         (r'导入模块|导入库', "教导导入模块/库"),
         (r'打印输出|print\s*\(', "教导打印输出"),
-        (r'遍历|循环|for\s+\w+\s+in', "教导遍历/循环操作"),
+        (r'for\s+\w+\s+in\b|for\s*循环|遍历(列表|数组|字典|字符串|集合|文件|目录|数据|元素)', "教导遍历/循环操作"),
         (r'安装依赖|安装包', "教导安装依赖/包"),
         (r'打开终端|打开命令行', "教导打开终端/命令行"),
     ]
@@ -398,16 +398,19 @@ def check_eval_set(skill_dir: Path) -> CheckResult:
     """检查是否有评估集或负样本"""
     r = CheckResult("评估集 & 负样本检查")
     skill_md = skill_dir / "SKILL.md"
+    found = False
 
     # 检查是否有 SPECIAL_CASES.md
     special_cases = skill_dir / "SPECIAL_CASES.md"
     if special_cases.exists():
         r.ok("存在 SPECIAL_CASES.md (好)")
+        found = True
 
     # 检查是否有评估目录
     eval_dir = skill_dir / "evals"
     if eval_dir.exists():
         r.ok("存在 evals/ 目录 (好)")
+        found = True
         # 检查是否同时有正反例
         pos = eval_dir / "positive.json"
         neg = eval_dir / "negative.json"
@@ -421,12 +424,14 @@ def check_eval_set(skill_dir: Path) -> CheckResult:
         r.warn("没有 evals/ 目录 — 建议添加正反例 JSON 文件")
 
     # 检查 SKILL.md 中是否包含正/负样本
+    # (只认明确的评估用例标记; 正文里一般性的「禁止/forbidden」业务规则不算负样本)
     if skill_md.exists():
         content = read_file_safe(skill_md)
-        if re.search(r'(?i)(正样本|负样本|positive|negative|forbidden|禁止)', content):
+        if re.search(r'(?i)(正样本|负样本|正反例|positive sample|negative sample)', content):
             r.ok("SKILL.md 中内嵌了评估用例")
+            found = True
 
-    if r.status == OK:
+    if not found:
         r.warn("未找到显式的评估集或负样本 (建议在 SKILL.md 或 evals/ 中添加)")
 
     return r
@@ -624,7 +629,7 @@ def check_verification_loop(skill_md: Path, lang: str = 'mixed') -> CheckResult:
         return r.ok("跳过 (无正文)")
 
     # 检测是否呈现多步工作流
-    en_step_signals = re.findall(r'(?i)(\bstep\s*\d+|\bphase\s*\d+|then\s+\w+\s+\w+|after\s+that)', body)
+    en_step_signals = re.findall(r'(?i)(\bstep\s*\d+|\bphase\s*\d+|then\s+\w+\s+\w+|after\s+that|#\s*\d+[.、])', body)
     zh_step_signals = re.findall(r'(步骤[一二三四五六七八九十]|第[一二三四五六七八九十]步|然后|最后)', body)
     workflow_like = len(en_step_signals) + len(zh_step_signals) >= 3
 
