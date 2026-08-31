@@ -22,6 +22,12 @@ Skill Validator — 对 Agent Skill 目录结构进行自动合规检查。
     [12] 负样本检查: 是否有评估集或 SPECIAL_CASES.md
     [13] 文件尺寸安全红线
     [14] 中文反模式: 常识灌输、教程式写作、分步教程检测
+    [15] 官方硬约束: name ≤64 字符/保留词, description ≤1024 字符/无 XML/无工作流泄漏
+    [16] 正文行数红线 (<500 行, 官方建议)
+    [17] 反模式: 反斜杠路径 (BP smell, 路径必须正斜杠)
+    [18] 反模式: 无验证闭环 (NVS/EWP smell, 多步工作流缺验证环节)
+    [19] 反模式: 合理化漏洞 (RL smell, 强纪律规则缺防跳过护栏)
+    [20] 渐进披露: references/ 长文件 (>100 行) 缺顶部 TOC
 """
 
 import argparse
@@ -128,6 +134,11 @@ def check_naming(dirname: str) -> CheckResult:
     r = CheckResult("目录命名规范")
     if not re.match(r'^[a-z0-9]+(-[a-z0-9]+)*$', dirname):
         return r.fail(f"目录名 '{dirname}' 不是全小写连字符格式 (例: my-skill-name)")
+    # 官方规范: name ≤ 64 字符; 禁用保留词 anthropic / claude
+    if len(dirname) > 64:
+        r.fail(f"目录名 {len(dirname)} 字符 > 64 (官方硬上限)")
+    if "anthropic" in dirname or "claude" in dirname:
+        r.fail("目录名含保留词 anthropic/claude (官方禁用)")
     return r.ok(f"✓ 目录名 '{dirname}' 符合规范")
 
 
@@ -175,15 +186,31 @@ def check_frontmatter(skill_md: Path, lang: str = 'mixed') -> CheckResult:
     desc = desc_match.group(1).strip().strip('"').strip("'")
     desc_tokens = rough_token_count(desc)
 
+    # 官方硬约束 (2026): description ≤ 1,024 字符; 不得含 XML 标签
+    if len(desc) > 1024:
+        r.fail(f"description {len(desc)} 字符 > 1024 (官方硬上限)")
+    if re.search(r'<[a-zA-Z/][^>]*>', desc):
+        r.fail("description 含 XML 标签 (XID smell — 可注入意外指令，官方禁用)")
+
     r.ok(f"description 已找到 ({desc_tokens} tokens)")
 
-    # 检查是否以 Load when 或 加载当 开头
-    if not (desc.lower().startswith("load when") or desc.startswith("加载当")):
-        r.warn(f"description 不以 'Load when' 或 '加载当' 开头 (当前: {desc[:60]}...)")
+    # 检查是否以 Load when / Use when (2026 社区惯例) 或 加载当 开头
+    if not (desc.lower().startswith("load when") or desc.lower().startswith("use when") or desc.startswith("加载当")):
+        r.warn(f"description 不以 'Load when'/'Use when' 或 '加载当' 开头 (当前: {desc[:60]}...)")
 
     # 检查长度
     if desc_tokens > 60:
         r.warn(f"description 约 {desc_tokens} tokens (>50)，建议精简")
+
+    # 工作流泄漏 (2026 社区共识): Agent 会从 description 提取计划并跳过加载正文
+    workflow_leak_patterns = [
+        (r'(?i)(\d+)\s*[-–]\s*(phase|step)', "description 含 N-phase/N-step 工作流摘要"),
+        (r'(?i)\b(plan\s*[,，]\s*execute\s*[,，]\s*verify)', "description 含 plan/execute/verify 流程摘要"),
+        (r'(?i)(workflow|pipeline)\s*[:：]', "description 含 workflow/pipeline 摘要"),
+    ]
+    for pat, msg in workflow_leak_patterns:
+        if re.search(pat, desc):
+            r.warn(f"{msg} — Agent 会直接照做而跳过加载正文，description 应只写触发条件")
 
     # 检查废话模式 — 根据语言选择规则
     garbage_patterns = []
@@ -222,6 +249,11 @@ def check_body_quality(skill_md: Path, lang: str = 'mixed') -> CheckResult:
     # 超过 5000 tokens 警告
     if tokens > 5000:
         r.warn(f"正文 {tokens} tokens > 5000，应剥离部分内容到 references/ 或 assets/")
+
+    # 正文行数红线 (2026 官方建议): < 500 行为最优
+    body_lines = len(body.splitlines())
+    if body_lines > 500:
+        r.warn(f"正文 {body_lines} 行 > 500 (官方建议上限)，应拆分内容到独立文件")
 
     # 长表格检测
     if contains_markdown_table(body):
@@ -554,6 +586,137 @@ def check_chinese_common_knowledge(skill_md: Path, lang: str = 'mixed') -> Check
     return r
 
 
+def check_backslash_paths(skill_md: Path) -> CheckResult:
+    """反模式: 反斜杠路径 (BP smell) — Agent 按文件系统导航, 路径必须正斜杠"""
+    r = CheckResult("反模式检测: 反斜杠路径")
+
+    content = read_file_safe(skill_md)
+    if not content.strip():
+        return r.ok("跳过 (SKILL.md 为空)")
+
+    # 去掉代码块中的 Windows 风格说明性文字后, 仍找 "目录/文件" 样式的反斜杠路径
+    body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', content, count=1, flags=re.DOTALL)
+    hits = []
+    for i, line in enumerate(body.splitlines(), 1):
+        # 剔除 Windows 盘符路径 (C:\ 形式 — 通常是文档示例) 后再匹配,
+        # 避免同一行里真正的反斜杠路径被整行误排除
+        line_clean = re.sub(r'[A-Za-z]:\\', '', line)
+        # 排除 Markdown 转义 (\\) 与 JSON 字符串转义场景, 只匹配目录段/文件名样式的反斜杠
+        if re.search(r'[\w.-]+\\[\w.-]+(?:\\|/|\s|[`)\],;。]|$)', line_clean):
+            hits.append((i, line.strip()[:80]))
+    if hits:
+        for ln, preview in hits[:3]:
+            r.warn(f"第 {ln} 行疑似反斜杠路径 — Agent 按文件系统导航, 必须用正斜杠: \"{preview}\"")
+        if len(hits) > 3:
+            r.warn(f"…共 {len(hits)} 处")
+        return r
+
+    return r.ok("未检测到反斜杠路径 (好)")
+
+
+def check_verification_loop(skill_md: Path, lang: str = 'mixed') -> CheckResult:
+    """反模式: 无验证闭环 (NVS/EWP smell) — 多步工作流应含验证环节"""
+    r = CheckResult("反模式检测: 无验证闭环")
+
+    content = read_file_safe(skill_md)
+    body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', content, count=1, flags=re.DOTALL)
+    if not body.strip():
+        return r.ok("跳过 (无正文)")
+
+    # 检测是否呈现多步工作流
+    en_step_signals = re.findall(r'(?i)(\bstep\s*\d+|\bphase\s*\d+|then\s+\w+\s+\w+|after\s+that)', body)
+    zh_step_signals = re.findall(r'(步骤[一二三四五六七八九十]|第[一二三四五六七八九十]步|然后|最后)', body)
+    workflow_like = len(en_step_signals) + len(zh_step_signals) >= 3
+
+    if not workflow_like:
+        return r.ok("未呈现多步工作流 (跳过)")
+
+    # 检测是否有验证/确认环节
+    verify_patterns = [
+        r'(?i)(verify|validate|validation|check that|assert|confirm)',
+        r'(验证|校验|检查是否|确认.{0,10}(通过|成功|正确)|测试是否)',
+        r'(?i)(test|run the test|pass the test|lint|build)',
+    ]
+    if any(re.search(p, body) for p in verify_patterns):
+        return r.ok("多步工作流含验证环节 (好)")
+
+    r.warn("检测到多步工作流但无验证环节 (NVS/EWP smell) — 产出后应跑什么检查、什么算通过，需写明")
+    return r
+
+
+def check_rationalization_loophole(skill_md: Path, lang: str = 'mixed') -> CheckResult:
+    """反模式: 合理化漏洞 (RL smell, 出现于 94% 真实 skill) —
+    含强纪律规则 (ALWAYS/NEVER/MUST/必须/禁止) 时应配防跳过护栏:
+    例外枚举/红旗清单/对照表/无例外声明"""
+    r = CheckResult("反模式检测: 合理化漏洞 (RL)")
+
+    content = read_file_safe(skill_md)
+    body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', content, count=1, flags=re.DOTALL)
+    if not body.strip():
+        return r.ok("跳过 (无正文)")
+
+    # 是否声明了强纪律规则
+    discipline_patterns = [
+        r'(?i)\bALWAYS\b',
+        r'(?i)\bNEVER\b',
+        r'(?i)\bMUST\b',
+        r'(?i)\bMANDATORY\b',
+        r'必须|禁止|绝不|不得|无例外',
+    ]
+    discipline_hits = sum(len(re.findall(p, body)) for p in discipline_patterns)
+    if discipline_hits < 2:
+        return r.ok("未声明强纪律规则 (跳过)")
+
+    # 是否配有防合理化护栏
+    guardrail_patterns = [
+        (r'(?i)(no exceptions|nothing else|其余一律|无例外)', "显式'无例外'声明"),
+        (r'(?i)(when (not )?to use|when not to|例外|除外|逃生舱|escape hatch)', "例外/逃生舱枚举"),
+        (r'(?i)(red flags?|红旗|stop and (restart|start over)|停下重来)', "红旗清单"),
+        (r'(?i)(rationaliz|借口|借口对照|合理化)', "合理化对照表"),
+        (r'(?i)(spirit (and|vs|or) letter|字面.{0,6}(精神|就是)|违反.{0,6}(字面|文字))', "'精神与字面'原则"),
+    ]
+    found = [desc for pat, desc in guardrail_patterns if re.search(pat, body)]
+    if found:
+        r.ok(f"强纪律规则配有护栏: {', '.join(found)}")
+        return r
+
+    r.warn(f"声明了 {discipline_hits} 处强纪律规则但无防跳过护栏 (RL smell, 出现于 94% 真实 skill) — "
+           f"建议补充: 显式例外枚举 + 红旗清单 + '无例外'声明")
+    return r
+
+
+def check_reference_toc(skill_dir: Path) -> CheckResult:
+    """渐进披露: references/ 长文件 (>100 行) 顶部应有目录 TOC —
+    模型可能只部分读取, TOC 让它看到全貌"""
+    r = CheckResult("渐进披露: references/ 长文件 TOC")
+
+    ref_dir = skill_dir / "references"
+    if not ref_dir.is_dir():
+        return r.ok("无 references/ 目录 (跳过)")
+
+    md_files = sorted(ref_dir.glob("*.md"))
+    if not md_files:
+        return r.ok("references/ 无 Markdown 文件 (跳过)")
+
+    missing = []
+    for f in md_files:
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        if len(lines) < 100:
+            continue
+        # 检查前 30 行内是否有 TOC 特征: >=3 个指向本文件锚点的 Markdown 链接
+        head = "\n".join(lines[:30])
+        anchors = re.findall(r'\]\(#[^)]+\)', head)
+        if len(anchors) < 3:
+            missing.append(f"{f.name} ({len(lines)} 行)")
+
+    if missing:
+        for name in missing:
+            r.warn(f"{name} 超过 100 行但顶部无目录 (TOC) — 模型可能只部分读取, 应在文件顶部列出章节")
+        return r
+
+    return r.ok("references/ 长文件均含 TOC (好)")
+
+
 # ── 主流程 ────────────────────────────────────────────────
 
 def validate_skill(skill_dir: Path, lang: str = 'auto') -> list:
@@ -581,6 +744,10 @@ def validate_skill(skill_dir: Path, lang: str = 'auto') -> list:
         results.append(check_flat_layout(skill_dir))
         results.append(check_file_size_redlines(skill_dir))
         results.append(check_chinese_common_knowledge(skill_md, lang))
+        results.append(check_backslash_paths(skill_md))
+        results.append(check_verification_loop(skill_md, lang))
+        results.append(check_rationalization_loophole(skill_md, lang))
+        results.append(check_reference_toc(skill_dir))
 
     return results
 
